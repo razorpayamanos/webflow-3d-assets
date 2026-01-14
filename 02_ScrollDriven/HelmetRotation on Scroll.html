@@ -1,0 +1,149 @@
+<script type="importmap">
+  {
+    "imports": {
+      "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+      "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+    }
+  }
+</script>
+
+<style>
+  .cube-scroll-track {
+    height: 400vh; 
+    position: relative;
+    z-index: 10;
+  }
+
+  .cube-sticky-container {
+    position: -webkit-sticky;
+    position: sticky;
+    top: 0;
+    width: 100%;
+    height: 100vh;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    overflow: hidden;
+  }
+
+  #three-canvas-container {
+    width: 100%;
+    height: 100%;
+    outline: none;
+  }
+</style>
+
+<div class="cube-scroll-track">
+  <div class="cube-sticky-container">
+    <div id="three-canvas-container"></div>
+  </div>
+</div>
+
+<script type="module">
+  import * as THREE from 'three';
+  import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+
+  // --- 1. Setup Scene ---
+  const container = document.getElementById('three-canvas-container');
+  const scene = new THREE.Scene();
+
+  // --- 2. Setup Camera ---
+  const camera = new THREE.PerspectiveCamera(75, container.clientWidth / container.clientHeight, 0.1, 1000);
+  camera.position.z = 10; 
+  camera.position.y = -5; 
+
+  // --- 3. Setup Renderer ---
+  const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+  renderer.setSize(container.clientWidth, container.clientHeight);
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  
+  // Important for GLB colors to look correct
+  renderer.outputColorSpace = THREE.SRGBColorSpace; 
+  container.appendChild(renderer.domElement);
+
+  // --- 4. Add Lights (Required for 3D Models) ---
+  const ambientLight = new THREE.AmbientLight(0xffffff, 1); // Soft white light
+  scene.add(ambientLight);
+
+  const directionalLight = new THREE.DirectionalLight(0xffffff, 2); // Strong sun-like light
+  directionalLight.position.set(5, 10, 7.5);
+  scene.add(directionalLight);
+
+  // --- 5. Load the GLB Model ---
+  let model = null; // We store the loaded model here
+  let mixer = null; // Animation mixer
+  let action = null; // Animation action
+  let clipDuration = 0; // Duration of the animation clip
+
+  const loader = new GLTFLoader();
+
+  // PASTE YOUR WEBFLOW ASSET URL INSIDE THE QUOTES BELOW
+  const glbUrl = './assets/Walk3.glb'; // Example: 'https://assets.website-files.com/your-glb-file.glb'
+
+  loader.load(
+    glbUrl,
+    function (gltf) {
+      model = gltf.scene;
+      
+      // Auto-center the model
+      const box = new THREE.Box3().setFromObject(model);
+      const center = box.getCenter(new THREE.Vector3());
+      model.position.sub(center); // Centers the model at (0,0,0)
+
+      // Adjust Scale (Change this if the helmet is too big/small)
+      model.scale.set(0.075, 0.075, 0.075); 
+
+      scene.add(model);
+
+      // Setup Animation Mixer
+      if (gltf.animations && gltf.animations.length > 0) {
+        mixer = new THREE.AnimationMixer(model);
+        const clip = gltf.animations[0];
+        clipDuration = clip.duration;
+        action = mixer.clipAction(clip);
+        action.play();
+        action.paused = true; // Pause to control manually
+      }
+    },
+    undefined,
+    function (error) {
+      console.error('An error happened loading the GLB:', error);
+    }
+  );
+
+  // --- 6. Scroll Logic ---
+  const track = document.querySelector('.cube-scroll-track');
+  
+  function animateScroll() {
+    if (!model) return; // Don't rotate if model isn't loaded yet
+
+    const rect = track.getBoundingClientRect();
+    const trackHeight = rect.height - window.innerHeight;
+    const rawPercent = -rect.top / trackHeight;
+    const percent = Math.max(0, Math.min(1, rawPercent));
+
+    // Scrub the animation based on scroll percentage
+    if (mixer && action) {
+      action.time = percent * clipDuration;
+      mixer.update(0);
+    }
+  }
+
+  // --- 7. Animation Loop ---
+  function animate() {
+    requestAnimationFrame(animate);
+    animateScroll();
+    renderer.render(scene, camera);
+  }
+  
+  animate();
+
+  // --- 8. Handle Resize ---
+  window.addEventListener('resize', () => {
+    const width = container.clientWidth;
+    const height = container.clientHeight;
+    camera.aspect = width / height;
+    camera.updateProjectionMatrix();
+    renderer.setSize(width, height);
+  });
+</script>

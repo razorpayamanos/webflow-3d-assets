@@ -1,0 +1,192 @@
+<script type="importmap">
+  {
+    "imports": {
+      "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+      "three/addons/": "https://unpkg.com/three@0.160.0/examples/jsm/"
+    }
+  }
+</script>
+
+<style>
+  .cube-scroll-track {
+    height: 400vh; 
+    position: relative;
+    z-index: 10;
+  }
+
+  .cube-sticky-container {
+    position: -webkit-sticky;
+    position: sticky;
+    top: 0;
+    width: 100%;
+    height: 100vh;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    overflow: hidden;
+  }
+
+  #three-canvas-container {
+    width: 100%;
+    height: 100%;
+    outline: none;
+    cursor: grab;
+  }
+  
+  #three-canvas-container:active {
+    cursor: grabbing;
+  }
+</style>
+
+<div class="cube-scroll-track">
+  <div class="cube-sticky-container">
+    <div id="three-canvas-container"></div>
+  </div>
+</div>
+
+<script type="module">
+  import * as THREE from 'three';
+  import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+
+  // --- 1. Setup Scene ---
+  const container = document.getElementById('three-canvas-container');
+  const scene = new THREE.Scene();
+
+  // --- 2. Setup Camera ---
+  const camera = new THREE.PerspectiveCamera(75, container.clientWidth / container.clientHeight, 0.1, 1000);
+  camera.position.set(0, 0, 3); // Centered and moved closer
+
+  // --- 3. Setup Renderer ---
+  const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+  renderer.setSize(container.clientWidth, container.clientHeight);
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  
+  renderer.outputColorSpace = THREE.SRGBColorSpace; 
+  container.appendChild(renderer.domElement);
+
+  // --- 4. Add Lights ---
+  const ambientLight = new THREE.AmbientLight(0xffffff, 1);
+  scene.add(ambientLight);
+
+  const directionalLight = new THREE.DirectionalLight(0xffffff, 2); 
+  directionalLight.position.set(5, 10, 7.5);
+  scene.add(directionalLight);
+
+  // --- 5. Load the GLB Model ---
+  let model = null; 
+
+  const loader = new GLTFLoader();
+
+  const glbUrl = './assets/Globe.glb'; 
+
+  loader.load(
+    glbUrl,
+    function (gltf) {
+      model = gltf.scene;
+      
+      // Auto-center the model
+      const box = new THREE.Box3().setFromObject(model);
+      const center = box.getCenter(new THREE.Vector3());
+      model.position.sub(center); 
+
+      // Normalize Scale to fit in view
+      const size = box.getSize(new THREE.Vector3());
+      const maxDim = Math.max(size.x, size.y, size.z);
+      if (maxDim > 0) {
+        const targetSize = 2.5; 
+        const scale = targetSize / maxDim;
+        model.scale.set(scale, scale, scale);
+      }
+
+      // Apply Material Changes (Blue tint on top of texture)
+      model.traverse((child) => {
+        if (child.isMesh) {
+          // Tint the material with the requested blue color
+          child.material.color.set('#305eff');
+          
+          // Ensure texture (map) is preserved and color space is correct
+          if (child.material.map) {
+             child.material.map.colorSpace = THREE.SRGBColorSpace;
+          }
+        }
+      });
+
+      scene.add(model);
+    },
+    undefined,
+    function (error) {
+      console.error('An error happened loading the GLB:', error);
+    }
+  );
+
+  // --- 6. Interaction Logic ---
+  let isDragging = false;
+  let previousMouseX = 0;
+  
+  // Rotation State
+  let baseRotationY = 0;
+  let targetParallaxX = 0;
+  let targetParallaxY = 0;
+
+  // Listeners
+  container.addEventListener('mousedown', (e) => {
+    isDragging = true;
+    previousMouseX = e.clientX;
+  });
+
+  window.addEventListener('mouseup', () => {
+    isDragging = false;
+  });
+
+  window.addEventListener('mousemove', (e) => {
+    // Drag Rotation (Y axis)
+    if (isDragging) {
+      const delta = e.clientX - previousMouseX;
+      baseRotationY += delta * 0.005; 
+      previousMouseX = e.clientX;
+    }
+
+    // Parallax (Hover) Calculation
+    const rect = container.getBoundingClientRect();
+    // Normalized coordinates (-1 to 1)
+    const x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+    const y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+
+    // Slight rotation based on mouse position
+    targetParallaxY = x * -0.1; 
+    targetParallaxX = y * -0.1;
+  });
+
+  // --- 7. Animation Loop ---
+  function animate() {
+    requestAnimationFrame(animate);
+
+    if (model) {
+      // Smoothly interpolate parallax
+      const smoothFactor = 0.07;
+      
+      // Apply base rotation + interpolated parallax
+      // We calculate the current parallax offset relative to base
+      const currentParallaxY = model.rotation.y - baseRotationY;
+      
+      // Interpolate current parallax towards target
+      const nextParallaxY = currentParallaxY + (targetParallaxY - currentParallaxY) * smoothFactor;
+      
+      model.rotation.y = baseRotationY + nextParallaxY;
+      model.rotation.x += (targetParallaxX - model.rotation.x) * smoothFactor;
+    }
+
+    renderer.render(scene, camera);
+  }
+  
+  animate();
+
+  // --- 8. Handle Resize ---
+  window.addEventListener('resize', () => {
+    const width = container.clientWidth;
+    const height = container.clientHeight;
+    camera.aspect = width / height;
+    camera.updateProjectionMatrix();
+    renderer.setSize(width, height);
+  });
+</script>
