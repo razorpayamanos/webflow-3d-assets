@@ -49,8 +49,8 @@
 
   // --- 2. Setup Camera ---
   const camera = new THREE.PerspectiveCamera(75, container.clientWidth / container.clientHeight, 0.1, 1000);
-  camera.position.z = 10; 
-  camera.position.y = -5; 
+  camera.position.z = 1; 
+  camera.position.y = 0; 
 
   // --- 3. Setup Renderer ---
   const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
@@ -78,7 +78,7 @@
   const loader = new GLTFLoader();
 
   // PASTE YOUR WEBFLOW ASSET URL INSIDE THE QUOTES BELOW
-  const glbUrl = './assets/Walk3.glb'; // Example: 'https://assets.website-files.com/your-glb-file.glb'
+  const glbUrl = './assets/Helmet.glb'; // Example: 'https://assets.website-files.com/your-glb-file.glb'
 
   loader.load(
     glbUrl,
@@ -91,7 +91,7 @@
       model.position.sub(center); // Centers the model at (0,0,0)
 
       // Adjust Scale (Change this if the helmet is too big/small)
-      model.scale.set(0.075, 0.075, 0.075); 
+      model.scale.set(1, 1, 1); 
 
       scene.add(model);
 

@@ -1,0 +1,380 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Scroll-Driven Tunnel Animation</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        html,
+        body {
+            overflow-x: hidden;
+        }
+
+        body {
+            height: 500vh;
+            background: #000;
+        }
+
+        #canvas-container {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100vh;
+            z-index: -1;
+        }
+
+        canvas {
+            display: block;
+        }
+
+        .scroll-indicator {
+            position: fixed;
+            bottom: 30px;
+            left: 50%;
+            transform: translateX(-50%);
+            color: white;
+            font-family: 'Arial', sans-serif;
+            font-size: 14px;
+            opacity: 0.7;
+            z-index: 10;
+            text-align: center;
+            pointer-events: none;
+            animation: bounce 2s infinite;
+            transition: opacity 0.5s;
+        }
+
+        .scroll-indicator::after {
+            content: '↓';
+            display: block;
+            font-size: 24px;
+            margin-top: 5px;
+        }
+
+        @keyframes bounce {
+
+            0%,
+            20%,
+            50%,
+            80%,
+            100% {
+                transform: translateX(-50%) translateY(0);
+            }
+
+            40% {
+                transform: translateX(-50%) translateY(-10px);
+            }
+
+            60% {
+                transform: translateX(-50%) translateY(-5px);
+            }
+        }
+
+        .progress-bar {
+            position: fixed;
+            top: 0;
+            left: 0;
+            height: 3px;
+            background: linear-gradient(90deg, #00f2ff, #ff00f2);
+            z-index: 100;
+            width: 0%;
+        }
+
+        .debug-info {
+            position: fixed;
+            top: 10px;
+            left: 10px;
+            color: #00ff00;
+            font-family: monospace;
+            font-size: 12px;
+            background: rgba(0, 0, 0, 0.7);
+            padding: 10px;
+            border-radius: 5px;
+            z-index: 100;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="canvas-container"></div>
+    <div class="scroll-indicator">Scroll to explore</div>
+    <div class="progress-bar" id="progress-bar"></div>
+    <div class="debug-info" id="debug-info">Loading...</div>
+
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+            "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+        }
+    }
+    </script>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+        import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
+
+        // ============================================
+        // CONFIGURATION
+        // ============================================
+        const CONFIG = {
+            glbPath: './assets/Test_OfficeLady3.4-v1.glb',
+            showDebug: true,
+            targetCamera: 'DutchCamera004',
+        };
+
+        // ============================================
+        // SCENE SETUP
+        // ============================================
+        const container = document.getElementById('canvas-container');
+        const progressBar = document.getElementById('progress-bar');
+        const debugInfo = document.getElementById('debug-info');
+
+        if (!CONFIG.showDebug) debugInfo.style.display = 'none';
+
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color('#0039FF');
+
+        // Optimized renderer settings
+        const renderer = new THREE.WebGLRenderer({
+            antialias: true,
+            powerPreference: "high-performance"
+        });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5)); // Cap pixel ratio for performance
+        renderer.shadowMap.enabled = false; // Disable shadows for performance
+        renderer.outputColorSpace = THREE.SRGBColorSpace;
+        renderer.toneMapping = THREE.ACESFilmicToneMapping;
+        renderer.toneMappingExposure = 1.5;
+        container.appendChild(renderer.domElement);
+
+        let camera = new THREE.PerspectiveCamera(
+            75,
+            window.innerWidth / window.innerHeight,
+            0.1,
+            1000
+        );
+
+        // ============================================
+        // OPTIMIZED LIGHTING - Fewer lights, better performance
+        // ============================================
+        function setupLighting() {
+            // Strong ambient light
+            const ambientLight = new THREE.AmbientLight(0xffffff, 2);
+            scene.add(ambientLight);
+
+            // Hemisphere light
+            const hemiLight = new THREE.HemisphereLight(0x00ffff, 0x0044ff, 1.0);
+            scene.add(hemiLight);
+
+            // Single directional light
+            const dirLight = new THREE.DirectionalLight(0xffffff, 1.5);
+            dirLight.position.set(0, 5, 10);
+            scene.add(dirLight);
+
+            // Reduced point lights - only 6 instead of 80
+            const pointLightPositions = [
+                { z: 0, color: 0x00ffff },
+                { z: -30, color: 0xff00ff },
+                { z: -60, color: 0x00ff88 },
+                { z: -90, color: 0x00ffff },
+                { z: -120, color: 0xff00ff },
+                { z: -150, color: 0x00ff88 },
+            ];
+
+            pointLightPositions.forEach((config) => {
+                const light = new THREE.PointLight(config.color, 2, 40);
+                light.position.set(0, 2, config.z);
+                scene.add(light);
+            });
+        }
+
+        setupLighting();
+
+        // ============================================
+        // GLB LOADER & ANIMATION
+        // ============================================
+        let mixer = null;
+        let animationDuration = 0;
+        let glbCamera = null;
+
+        // Setup Draco loader for compressed meshes
+        const dracoLoader = new DRACOLoader();
+        dracoLoader.setDecoderPath('https://www.gstatic.com/draco/versioned/decoders/1.5.6/');
+
+        const loader = new GLTFLoader();
+        loader.setDRACOLoader(dracoLoader);
+
+        loader.load(
+            CONFIG.glbPath,
+            (gltf) => {
+                console.log('=== GLB LOADED ===');
+                console.log('Animations:', gltf.animations.map(a => `${a.name} (${a.duration.toFixed(2)}s)`));
+
+                scene.add(gltf.scene);
+
+                // Find Camera002
+                gltf.scene.traverse((child) => {
+                    if (child.name === CONFIG.targetCamera || child.name.includes(CONFIG.targetCamera)) {
+                        if (child.isCamera) {
+                            glbCamera = child;
+                            console.log('Found camera:', child.name);
+                        } else {
+                            // Check children
+                            child.traverse((sub) => {
+                                if (sub.isCamera) {
+                                    glbCamera = sub;
+                                    console.log('Found camera in:', child.name);
+                                }
+                            });
+                        }
+                    }
+
+                    // Fallback - collect any camera
+                    if (child.isCamera && !glbCamera) {
+                        glbCamera = child;
+                    }
+
+                    // Optimize materials
+                    if (child.isMesh && child.material) {
+                        child.material.side = THREE.DoubleSide;
+                    }
+                });
+
+                // Also check gltf.cameras
+                if (!glbCamera && gltf.cameras.length > 0) {
+                    glbCamera = gltf.cameras.find(c => c.name.includes(CONFIG.targetCamera)) || gltf.cameras[0];
+                }
+
+                // Setup camera
+                if (glbCamera) {
+                    glbCamera.aspect = window.innerWidth / window.innerHeight;
+                    glbCamera.near = 0.01;
+                    glbCamera.far = 1000;
+                    glbCamera.updateProjectionMatrix();
+                    camera = glbCamera;
+                    console.log('Using camera:', camera.name);
+                }
+
+                // Setup animation - SINGLE PLAY controlled by scroll
+                if (gltf.animations.length > 0) {
+                    mixer = new THREE.AnimationMixer(gltf.scene);
+
+                    gltf.animations.forEach((clip) => {
+                        const action = mixer.clipAction(clip);
+                        action.setLoop(THREE.Loop); // Play only once
+                        action.clampWhenFinished = true; // Stay at end when finished
+                        action.play();
+                    });
+
+                    animationDuration = Math.max(...gltf.animations.map(a => a.duration));
+                    console.log('Animation duration:', animationDuration.toFixed(2) + 's');
+                }
+
+                // Hide scroll indicator
+                setTimeout(() => {
+                    document.querySelector('.scroll-indicator').style.opacity = '0';
+                }, 3000);
+            },
+            (progress) => {
+                const percent = (progress.loaded / progress.total * 100).toFixed(0);
+                debugInfo.textContent = `Loading: ${percent}%`;
+            },
+            (error) => {
+                console.error('Error loading GLB:', error);
+                debugInfo.textContent = `Error: ${error.message}`;
+            }
+        );
+
+        // ============================================
+        // SMOOTH SCROLL HANDLING
+        // ============================================
+        let currentScrollProgress = 0;
+        let targetScrollProgress = 0;
+
+        function updateScrollProgress() {
+            const scrollTop = window.scrollY;
+            const maxScroll = document.body.scrollHeight - window.innerHeight;
+            targetScrollProgress = Math.max(0, Math.min(1, scrollTop / maxScroll));
+        }
+
+        window.addEventListener('scroll', updateScrollProgress, { passive: true });
+
+        // ============================================
+        // LERP function for smooth interpolation
+        // ============================================
+        function lerp(start, end, factor) {
+            return start + (end - start) * factor;
+        }
+
+        // ============================================
+        // OPTIMIZED ANIMATION LOOP
+        // ============================================
+        let lastTime = 0;
+
+        function animate(currentTime) {
+            requestAnimationFrame(animate);
+
+            // Throttle to ~60fps max
+            const delta = currentTime - lastTime;
+            if (delta < 16) return; // Skip if less than 16ms since last frame
+            lastTime = currentTime;
+
+            // Smooth interpolation - lower value = smoother but slower response
+            currentScrollProgress = lerp(currentScrollProgress, targetScrollProgress, 0.05);
+
+            // Update animation based on scroll (0 to 1 maps to 0 to animationDuration)
+            if (mixer && animationDuration > 0) {
+                const targetTime = currentScrollProgress * animationDuration;
+                mixer.setTime(targetTime);
+            }
+
+            // Update progress bar
+            progressBar.style.width = `${currentScrollProgress * 100}%`;
+
+            // Update debug info (throttled)
+            if (CONFIG.showDebug && Math.round(currentTime) % 100 < 20) {
+                const camPos = camera.position;
+                debugInfo.innerHTML = `
+                    <strong>Scroll:</strong> ${(currentScrollProgress * 100).toFixed(1)}%<br>
+                    <strong>Time:</strong> ${(currentScrollProgress * animationDuration).toFixed(2)}s / ${animationDuration.toFixed(2)}s<br>
+                    <strong>Cam:</strong> ${camera.name || 'default'}<br>
+                    <strong>Pos:</strong> ${camPos.x.toFixed(1)}, ${camPos.y.toFixed(1)}, ${camPos.z.toFixed(1)}
+                `;
+            }
+
+            renderer.render(scene, camera);
+        }
+
+        animate(0);
+
+        // ============================================
+        // WINDOW RESIZE
+        // ============================================
+        let resizeTimeout;
+        window.addEventListener('resize', () => {
+            clearTimeout(resizeTimeout);
+            resizeTimeout = setTimeout(() => {
+                camera.aspect = window.innerWidth / window.innerHeight;
+                camera.updateProjectionMatrix();
+                renderer.setSize(window.innerWidth, window.innerHeight);
+            }, 100);
+        });
+
+        // Keyboard controls
+        window.addEventListener('keydown', (e) => {
+            if (e.key === 'ArrowDown' || e.key === ' ') window.scrollBy(0, 200);
+            if (e.key === 'ArrowUp') window.scrollBy(0, -200);
+        });
+    </script>
+</body>
+
+</html>

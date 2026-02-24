@@ -1,0 +1,474 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Scroll-Driven Tunnel Animation</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        html,
+        body {
+            overflow-x: hidden;
+        }
+
+        body {
+            height: 500vh;
+            background: #000;
+        }
+
+        #canvas-container {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100vh;
+            z-index: -1;
+        }
+
+        canvas {
+            display: block;
+        }
+
+        .scroll-indicator {
+            position: fixed;
+            bottom: 30px;
+            left: 50%;
+            transform: translateX(-50%);
+            color: white;
+            font-family: 'Arial', sans-serif;
+            font-size: 14px;
+            opacity: 0.7;
+            z-index: 10;
+            text-align: center;
+            pointer-events: none;
+            animation: bounce 2s infinite;
+            transition: opacity 0.5s;
+        }
+
+        .scroll-indicator::after {
+            content: '↓';
+            display: block;
+            font-size: 24px;
+            margin-top: 5px;
+        }
+
+        @keyframes bounce {
+
+            0%,
+            20%,
+            50%,
+            80%,
+            100% {
+                transform: translateX(-50%) translateY(0);
+            }
+
+            40% {
+                transform: translateX(-50%) translateY(-10px);
+            }
+
+            60% {
+                transform: translateX(-50%) translateY(-5px);
+            }
+        }
+
+        .progress-bar {
+            position: fixed;
+            top: 0;
+            left: 0;
+            height: 3px;
+            background: linear-gradient(90deg, #00f2ff, #ff00f2);
+            z-index: 100;
+            width: 0%;
+        }
+
+        .debug-info {
+            position: fixed;
+            top: 10px;
+            left: 10px;
+            color: #00ff00;
+            font-family: monospace;
+            font-size: 12px;
+            background: rgba(0, 0, 0, 0.7);
+            padding: 10px;
+            border-radius: 5px;
+            z-index: 100;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="canvas-container"></div>
+    <div class="scroll-indicator">Scroll to explore</div>
+    <div class="progress-bar" id="progress-bar"></div>
+    <div class="debug-info" id="debug-info">Loading...</div>
+
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+            "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+        }
+    }
+    </script>
+
+    <script type="module">
+        import * as THREE from 'three';
+        import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+        import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
+
+        // ============================================
+        // CONFIGURATION
+        // ============================================
+        const CONFIG = {
+            glbPath: './assets/Test_OfficeLady5.2-v1.glb',
+            showDebug: true,
+            targetCamera: 'DutchCamera004',
+            // Parallax settings - adjust these to control the effect intensity
+            parallax: {
+                enabled: true,
+                horizontalIntensityMin: 0.2,   // Horizontal intensity at top (scroll = 0)
+                horizontalIntensityMax: 1.4,   // Horizontal intensity at bottom (scroll = 100%)
+                verticalIntensity: 0.15,       // Vertical camera movement (very subtle)
+                rotationIntensity: 0.04,       // How much the camera rotates (in radians)
+                smoothness: 0.06,              // Lower = smoother but slower (0.01-0.2)
+            },
+            // Mobile specific settings
+            mobile: {
+                breakpoint: 768,               // Width below which mobile settings apply
+                cameraOffsetX: 0.35,           // Move camera left/right in mobile view (negative = left)
+                disableParallax: true,         // Disable cursor parallax on mobile
+                parallaxBreakpoint: 768        // Specific breakpoint for disabling parallax (can be different from main breakpoint)
+            }
+        };
+
+        // ============================================
+        // MOUSE / CURSOR TRACKING FOR PARALLAX
+        // ============================================
+        const mouse = {
+            x: 0,           // Normalized -1 to 1
+            y: 0,           // Normalized -1 to 1
+            targetX: 0,     // Target value for smoothing
+            targetY: 0,     // Target value for smoothing
+        };
+
+        // Track mouse movement
+        window.addEventListener('mousemove', (event) => {
+            // Normalize mouse position to -1 to 1 range
+            mouse.targetX = (event.clientX / window.innerWidth) * 2 - 1;
+            mouse.targetY = -(event.clientY / window.innerHeight) * 2 + 1;
+        }, { passive: true });
+
+        // Handle touch for mobile devices
+        window.addEventListener('touchmove', (event) => {
+            if (event.touches.length > 0) {
+                const touch = event.touches[0];
+                mouse.targetX = (touch.clientX / window.innerWidth) * 2 - 1;
+                mouse.targetY = -(touch.clientY / window.innerHeight) * 2 + 1;
+            }
+        }, { passive: true });
+
+        // Reset mouse position when leaving the window
+        window.addEventListener('mouseleave', () => {
+            mouse.targetX = 0;
+            mouse.targetY = 0;
+        });
+
+        // ============================================
+        // SCENE SETUP
+        // ============================================
+        const container = document.getElementById('canvas-container');
+        const progressBar = document.getElementById('progress-bar');
+        const debugInfo = document.getElementById('debug-info');
+
+        if (!CONFIG.showDebug) debugInfo.style.display = 'none';
+
+        const scene = new THREE.Scene();
+        scene.background = new THREE.Color('#0039FF');
+
+        // Optimized renderer settings
+        const renderer = new THREE.WebGLRenderer({
+            antialias: true,
+            powerPreference: "high-performance",
+            logarithmicDepthBuffer: true
+        });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5)); // Cap pixel ratio for performance
+        renderer.shadowMap.enabled = false; // Disable shadows for performance
+        renderer.outputColorSpace = THREE.SRGBColorSpace;
+        renderer.toneMapping = THREE.ACESFilmicToneMapping;
+        renderer.toneMappingExposure = 0.75;
+        container.appendChild(renderer.domElement);
+
+        let camera = new THREE.PerspectiveCamera(
+            75,
+            window.innerWidth / window.innerHeight,
+            0.1,
+            1000
+        );
+
+        // ============================================
+        // OPTIMIZED LIGHTING - Fewer lights, better performance
+        // ============================================
+
+        // ============================================
+        // GLB LOADER & ANIMATION
+        // ============================================
+        let mixer = null;
+        let animationDuration = 0;
+        let glbCamera = null;
+
+        // Setup Draco loader for compressed meshes
+        const dracoLoader = new DRACOLoader();
+        dracoLoader.setDecoderPath('https://www.gstatic.com/draco/versioned/decoders/1.5.6/');
+
+        const loader = new GLTFLoader();
+        loader.setDRACOLoader(dracoLoader);
+
+        loader.load(
+            CONFIG.glbPath,
+            (gltf) => {
+                console.log('=== GLB LOADED ===');
+                console.log('Animations:', gltf.animations.map(a => `${a.name} (${a.duration.toFixed(2)}s)`));
+
+                scene.add(gltf.scene);
+
+                // Find Camera002
+                gltf.scene.traverse((child) => {
+                    if (child.name === CONFIG.targetCamera || child.name.includes(CONFIG.targetCamera)) {
+                        if (child.isCamera) {
+                            glbCamera = child;
+                            console.log('Found camera:', child.name);
+                        } else {
+                            // Check children
+                            child.traverse((sub) => {
+                                if (sub.isCamera) {
+                                    glbCamera = sub;
+                                    console.log('Found camera in:', child.name);
+                                }
+                            });
+                        }
+                    }
+
+                    // Fallback - collect any camera
+                    if (child.isCamera && !glbCamera) {
+                        glbCamera = child;
+                    }
+
+                    // Optimize materials & fix frustum culling
+                    if (child.isMesh) {
+                        if (child.material) {
+                            child.material.side = THREE.DoubleSide;
+                        }
+                        // CRITICAL FIX: Disable frustum culling to prevent
+                        // meshes from disappearing when the camera moves close.
+                        // Three.js culls objects whose bounding sphere it thinks
+                        // is outside the view — but with animated/skinned meshes
+                        // or Dutch-angle cameras, this calculation is often wrong.
+                        child.frustumCulled = false;
+                    }
+                });
+
+                // Also check gltf.cameras
+                if (!glbCamera && gltf.cameras.length > 0) {
+                    glbCamera = gltf.cameras.find(c => c.name.includes(CONFIG.targetCamera)) || gltf.cameras[0];
+                }
+
+                // Setup camera
+                if (glbCamera) {
+                    glbCamera.aspect = window.innerWidth / window.innerHeight;
+                    glbCamera.near = 0.01;
+                    glbCamera.far = 1000;
+                    glbCamera.updateProjectionMatrix();
+                    camera = glbCamera;
+                    console.log('Using camera:', camera.name);
+                }
+
+                // Setup animation - SINGLE PLAY controlled by scroll
+                if (gltf.animations.length > 0) {
+                    mixer = new THREE.AnimationMixer(gltf.scene);
+
+                    gltf.animations.forEach((clip) => {
+                        const action = mixer.clipAction(clip);
+                        action.setLoop(THREE.Loop); // Play only once
+                        action.clampWhenFinished = true; // Stay at end when finished
+                        action.play();
+                    });
+
+                    animationDuration = Math.max(...gltf.animations.map(a => a.duration));
+                    console.log('Animation duration:', animationDuration.toFixed(2) + 's');
+                }
+
+                // Hide scroll indicator
+                setTimeout(() => {
+                    document.querySelector('.scroll-indicator').style.opacity = '0';
+                }, 3000);
+            },
+            (progress) => {
+                const percent = (progress.loaded / progress.total * 100).toFixed(0);
+                debugInfo.textContent = `Loading: ${percent}%`;
+            },
+            (error) => {
+                console.error('Error loading GLB:', error);
+                debugInfo.textContent = `Error: ${error.message}`;
+            }
+        );
+
+        // ============================================
+        // SMOOTH SCROLL HANDLING
+        // ============================================
+        let currentScrollProgress = 0;
+        let targetScrollProgress = 0;
+
+        function updateScrollProgress() {
+            const scrollTop = window.scrollY;
+            const maxScroll = document.body.scrollHeight - window.innerHeight;
+            targetScrollProgress = Math.max(0, Math.min(1, scrollTop / maxScroll));
+        }
+
+        window.addEventListener('scroll', updateScrollProgress, { passive: true });
+
+        // ============================================
+        // LERP function for smooth interpolation
+        // ============================================
+        function lerp(start, end, factor) {
+            return start + (end - start) * factor;
+        }
+
+        // ============================================
+        // OPTIMIZED ANIMATION LOOP
+        // ============================================
+        let lastTime = 0;
+
+        // Store the base camera transform from the GLB animation
+        const cameraOffset = {
+            x: 0,
+            y: 0,
+            rotX: 0,
+            rotY: 0,
+        };
+
+        function animate(currentTime) {
+            requestAnimationFrame(animate);
+
+            // Throttle to ~60fps max
+            const delta = currentTime - lastTime;
+            if (delta < 16) return; // Skip if less than 16ms since last frame
+            lastTime = currentTime;
+
+            // Smooth interpolation - lower value = smoother but slower response
+            currentScrollProgress = lerp(currentScrollProgress, targetScrollProgress, 0.05);
+
+            // Update animation based on scroll (0 to 1 maps to 0 to animationDuration)
+            // This sets the base camera position from the GLB animation
+            if (mixer && animationDuration > 0) {
+                const targetTime = currentScrollProgress * animationDuration;
+                mixer.setTime(targetTime);
+
+                // Re-apply near/far after mixer update (animation can override these)
+                if (glbCamera) {
+                    glbCamera.near = 0.001;
+                    glbCamera.far = 1000;
+                    glbCamera.updateProjectionMatrix();
+                }
+            }
+
+            // ============================================
+            // PARALLAX EFFECT - Apply cursor-based offset
+            // ============================================
+            // IMPORTANT: Save the base position BEFORE applying parallax
+            const basePosition = camera.position.clone();
+            const baseRotation = camera.rotation.clone();
+
+            // Calculate horizontal intensity based on scroll progress
+            // Hits max (1.4) at 30% scroll, stays at 1.4 after that
+            const intensityProgress = Math.min(currentScrollProgress / 0.3, 1.0);
+            const dynamicHorizontalIntensity = lerp(
+                CONFIG.parallax.horizontalIntensityMin,
+                CONFIG.parallax.horizontalIntensityMax,
+                intensityProgress
+            );
+
+            // Only apply parallax AFTER the GLB camera is loaded and ready
+            // AND check if we should disable it for mobile based on the specific parallax breakpoint
+            const shouldDisableParallax = CONFIG.mobile.disableParallax && (window.innerWidth < CONFIG.mobile.parallaxBreakpoint);
+            const parallaxEnabled = CONFIG.parallax.enabled && !shouldDisableParallax;
+
+            if (parallaxEnabled && glbCamera && mixer) {
+                // Smooth the mouse values
+                mouse.x = lerp(mouse.x, mouse.targetX, CONFIG.parallax.smoothness);
+                mouse.y = lerp(mouse.y, mouse.targetY, CONFIG.parallax.smoothness);
+
+                // Apply horizontal position offset (intensity increases as you scroll)
+                camera.position.x += mouse.x * dynamicHorizontalIntensity;
+
+                // Apply vertical position offset (very subtle to avoid going underground)
+                camera.position.y += mouse.y * CONFIG.parallax.verticalIntensity;
+
+                // CLAMP: Lock camera Y position to max 0.6 (cannot go higher)
+                camera.position.y = Math.min(camera.position.y, 0.6);
+
+                // Apply rotation to look toward cursor (horizontal only for cleaner feel)
+                camera.rotation.y -= mouse.x * CONFIG.parallax.rotationIntensity;
+            }
+
+            // ============================================
+            // MOBILE OFFSET
+            // ============================================
+            if (window.innerWidth < CONFIG.mobile.breakpoint) {
+                camera.position.x += CONFIG.mobile.cameraOffsetX;
+            }
+
+            // Update progress bar
+            progressBar.style.width = `${currentScrollProgress * 100}%`;
+
+            // Update debug info (throttled)
+            if (CONFIG.showDebug && Math.round(currentTime) % 100 < 20) {
+                const camPos = camera.position;
+                debugInfo.innerHTML = `
+                    <strong>Scroll:</strong> ${(currentScrollProgress * 100).toFixed(1)}%<br>
+                    <strong>Time:</strong> ${(currentScrollProgress * animationDuration).toFixed(2)}s / ${animationDuration.toFixed(2)}s<br>
+                    <strong>Cam:</strong> ${camera.name || 'default'}<br>
+                    <strong>Pos:</strong> ${camPos.x.toFixed(1)}, ${camPos.y.toFixed(1)}, ${camPos.z.toFixed(1)}<br>
+                    <strong>Mouse:</strong> ${mouse.x.toFixed(2)}, ${mouse.y.toFixed(2)}<br>
+                    <strong>H-Intensity:</strong> ${dynamicHorizontalIntensity.toFixed(2)}
+                `;
+            }
+
+            // RENDER with parallax applied
+            renderer.render(scene, camera);
+
+            // RESTORE base position so animation mixer works correctly next frame
+            camera.position.copy(basePosition);
+            camera.rotation.copy(baseRotation);
+        }
+
+        animate(0);
+
+        // ============================================
+        // WINDOW RESIZE
+        // ============================================
+        let resizeTimeout;
+        window.addEventListener('resize', () => {
+            clearTimeout(resizeTimeout);
+            resizeTimeout = setTimeout(() => {
+                camera.aspect = window.innerWidth / window.innerHeight;
+                camera.updateProjectionMatrix();
+                renderer.setSize(window.innerWidth, window.innerHeight);
+            }, 100);
+        });
+
+        // Keyboard controls
+        window.addEventListener('keydown', (e) => {
+            if (e.key === 'ArrowDown' || e.key === ' ') window.scrollBy(0, 200);
+            if (e.key === 'ArrowUp') window.scrollBy(0, -200);
+        });
+    </script>
+</body>
+
+</html>

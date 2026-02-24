@@ -1,0 +1,31 @@
+02_ScrollDriven/assets/Helmet.glb
+02_ScrollDriven/assets/model.glb
+02_ScrollDriven/Tunnel_MeshToon copy.html
+02_ScrollDriven/KTX2 Viewer.html
+02_ScrollDriven/assets/Test_OfficeLady2.95.glb
+02_ScrollDriven/assets/video.mp4
+02_ScrollDriven/assets/.DS_Store
+02_ScrollDriven/assets/.DS_Store
+02_ScrollDriven/assets/Test_OfficeLady3.2_webp50-v1.glb
+02_ScrollDriven/assets/.DS_Store
+02_ScrollDriven/Tunnel_MeshToon.html
+02_ScrollDriven/Tunnel_Claude.html
+02_ScrollDriven/Tunnel_Claude.html
+
+.DS_Store
+02_ScrollDriven/.DS_Store
+02_ScrollDriven/assets/.DS_Store
+02_ScrollDriven/assets/Test_OfficeLady5.1-v1.glb
+# macOS
+.DS_Store
+
+# Blender backups
+*.blend1
+
+# 3D heavy files (optional but recommended)
+*.glb
+*.gltf
+*.fbx
+
+# VS Code
+.vscode/
